@@ -15,8 +15,8 @@ import Image from "next/image";
 import { GALLERY_PHOTOS, TESTIMONIALS } from "@/lib/constants";
 import {
   fetchPhotos, fetchReviews, deletePhoto, deleteReview,
-  type DbPhoto, type DbReview,
 } from "@/lib/userContent";
+import { type DbPhoto, type DbReview } from "@/lib/supabase";
 import PhotoUploadForm  from "@/components/PhotoUploadForm";
 import ReviewUploadForm from "@/components/ReviewUploadForm";
 
@@ -116,7 +116,7 @@ export default function GalleryContent() {
                       fill
                       sizes="(max-width:768px) 50vw, 280px"
                       className="gallery-photo-img"
-                      unoptimized
+                      unoptimized={photo.src.startsWith("http")}
                     />
                     {photo.source === "user" && (
                       <span className="gallery-photo-badge">New</span>
