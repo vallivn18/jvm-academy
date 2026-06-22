@@ -1,0 +1,14 @@
+# netlify.toml
+# This file tells Netlify exactly how to build and deploy your Next.js site.
+# It overrides any dashboard settings — most reliable way to configure Netlify.
+
+[build]
+  command         = "npm run build"
+  publish         = ".next"
+
+[build.environment]
+  NODE_VERSION    = "20"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
