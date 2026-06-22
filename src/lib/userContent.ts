@@ -1,119 +1,136 @@
 /**
- * @file userContent.ts
- * @description Handles user-submitted photos & reviews on the Gallery page.
+ * @file userContent.ts — v2 (Supabase backend)
+ * @description All photo and review CRUD now goes through Supabase.
  *
- * HOW IT WORKS (important to understand):
- * ─────────────────────────────────────────
- * This site is a static Next.js site with NO backend database (yet).
- * So user-submitted content is stored in the VISITOR'S OWN BROWSER
- * using `localStorage`. This means:
+ * BEFORE (localStorage): data was saved only in the visitor's own browser.
+ * NOW (Supabase):        data is saved in a shared cloud database —
+ *                        visible to ALL visitors on ALL devices immediately.
  *
- *   ✅ Works immediately, no backend needed, completely free
- *   ✅ Each visitor can add their own photo/review and see it instantly
- *   ❌ Submissions are NOT shared between different visitors/devices —
- *      they only persist on the same browser that submitted them
+ * Photo uploads flow:
+ *   1. User picks a file  →  PhotoUploadForm
+ *   2. File is uploaded to Supabase Storage bucket "gallery"
+ *   3. Supabase returns a public URL for that file
+ *   4. That URL + caption is inserted into the gallery_photos table
+ *   5. GalleryContent re-fetches the list — photo appears for everyone
  *
- * 🚀 TO MAKE SUBMISSIONS PUBLIC (visible to ALL visitors), you need a
- * real backend. Recommended free options when you're ready:
- *   1. Supabase (https://supabase.com) — free Postgres DB + image storage
- *   2. Firebase (https://firebase.google.com) — free Firestore + Storage
- *   3. Google Sheets as a DB (simplest, via a Google Apps Script API)
- *
- * This file is written so that swapping localStorage for a real API call
- * later only requires changing the functions below — no component changes.
+ * Review flow:
+ *   1. User fills in name / role / rating / review text
+ *   2. Row is inserted into gallery_reviews table
+ *   3. GalleryContent re-fetches — review appears for everyone
  */
 
-import type { GalleryPhoto, Testimonial } from "@/lib/constants";
+import { supabase, type DbPhoto, type DbReview } from "@/lib/supabase";
 
-const PHOTOS_KEY = "jvm_user_photos";
-const REVIEWS_KEY = "jvm_user_reviews";
+// ─── Photos ───────────────────────────────────────────────────────────────────
 
-// ─── User-submitted photo type ────────────────────────────────────────────────
-export type UserPhoto = GalleryPhoto & {
-  uploadedAt: string; // ISO date string
-};
+/** Fetch all photos from Supabase, newest first. */
+export async function fetchPhotos(): Promise<DbPhoto[]> {
+  const { data, error } = await supabase
+    .from("gallery_photos")
+    .select("*")
+    .order("created_at", { ascending: false });
 
-// ─── User-submitted review type ───────────────────────────────────────────────
-export type UserReview = Testimonial & {
-  submittedAt: string;
-};
-
-/** Safely reads and parses a JSON array from localStorage. */
-function readArray<T>(key: string): T[] {
-  if (typeof window === "undefined") return []; // SSR guard
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T[]) : [];
-  } catch {
+  if (error) {
+    console.error("fetchPhotos error:", error.message);
     return [];
   }
-}
-
-/** Safely writes a JSON array to localStorage. */
-function writeArray<T>(key: string, data: T[]) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(key, JSON.stringify(data));
-  } catch {
-    // localStorage full or disabled — fail silently
-  }
-}
-
-// ─── Photos ────────────────────────────────────────────────────────────────────
-export function getUserPhotos(): UserPhoto[] {
-  return readArray<UserPhoto>(PHOTOS_KEY);
-}
-
-export function addUserPhoto(photo: Omit<UserPhoto, "id" | "uploadedAt" | "source">) {
-  const photos = getUserPhotos();
-  const newPhoto: UserPhoto = {
-    ...photo,
-    id: `user-photo-${Date.now()}`,
-    uploadedAt: new Date().toISOString(),
-    source: "user",
-  };
-  writeArray(PHOTOS_KEY, [newPhoto, ...photos]);
-  return newPhoto;
-}
-
-export function deleteUserPhoto(id: string) {
-  const photos = getUserPhotos().filter((p) => p.id !== id);
-  writeArray(PHOTOS_KEY, photos);
-}
-
-// ─── Reviews ───────────────────────────────────────────────────────────────────
-export function getUserReviews(): UserReview[] {
-  return readArray<UserReview>(REVIEWS_KEY);
-}
-
-export function addUserReview(review: Omit<UserReview, "id" | "submittedAt" | "source">) {
-  const reviews = getUserReviews();
-  const newReview: UserReview = {
-    ...review,
-    id: `user-review-${Date.now()}`,
-    submittedAt: new Date().toISOString(),
-    source: "user",
-  };
-  writeArray(REVIEWS_KEY, [newReview, ...reviews]);
-  return newReview;
-}
-
-export function deleteUserReview(id: string) {
-  const reviews = getUserReviews().filter((r) => r.id !== id);
-  writeArray(REVIEWS_KEY, reviews);
+  return data as DbPhoto[];
 }
 
 /**
- * Converts an uploaded File into a base64 data URL so it can be
- * stored in localStorage and displayed immediately (no server upload needed).
- * Note: localStorage has a ~5-10MB total limit, so very large images
- * should be compressed before calling this in production.
+ * Upload a photo file to Supabase Storage, then insert a row into
+ * gallery_photos with the resulting public URL.
+ *
+ * Returns the new DbPhoto row, or throws on error.
  */
-export function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+export async function uploadPhoto(
+  file: File,
+  caption: string
+): Promise<DbPhoto> {
+  // 1. Build a unique filename so concurrent uploads never collide
+  const ext      = file.name.split(".").pop() ?? "jpg";
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const path     = `uploads/${filename}`;
+
+  // 2. Upload binary file to Supabase Storage bucket "gallery"
+  const { error: uploadError } = await supabase.storage
+    .from("gallery")
+    .upload(path, file, { contentType: file.type, upsert: false });
+
+  if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
+
+  // 3. Get the permanent public URL for this file
+  const { data: urlData } = supabase.storage
+    .from("gallery")
+    .getPublicUrl(path);
+
+  const publicUrl = urlData.publicUrl;
+
+  // 4. Insert a record in gallery_photos pointing to that URL
+  const { data, error: insertError } = await supabase
+    .from("gallery_photos")
+    .insert({ src: publicUrl, caption: caption || "Shared by a visitor", source: "user" })
+    .select()
+    .single();
+
+  if (insertError) throw new Error(`DB insert failed: ${insertError.message}`);
+  return data as DbPhoto;
+}
+
+/** Delete a photo row + its storage file by record id and src URL. */
+export async function deletePhoto(id: string, src: string): Promise<void> {
+  // Remove DB row
+  await supabase.from("gallery_photos").delete().eq("id", id);
+
+  // Also remove the actual file from Storage (extract path from public URL)
+  try {
+    const url      = new URL(src);
+    const pathPart = url.pathname.split("/object/public/gallery/")[1];
+    if (pathPart) {
+      await supabase.storage.from("gallery").remove([pathPart]);
+    }
+  } catch {
+    // If storage delete fails, the DB row is already gone — not critical
+  }
+}
+
+// ─── Reviews ──────────────────────────────────────────────────────────────────
+
+/** Fetch all reviews from Supabase, newest first. */
+export async function fetchReviews(): Promise<DbReview[]> {
+  const { data, error } = await supabase
+    .from("gallery_reviews")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("fetchReviews error:", error.message);
+    return [];
+  }
+  return data as DbReview[];
+}
+
+/**
+ * Insert a new review into gallery_reviews.
+ * Returns the new DbReview row.
+ */
+export async function submitReview(review: {
+  name:   string;
+  role:   string;
+  rating: number;
+  review: string;
+}): Promise<DbReview> {
+  const { data, error } = await supabase
+    .from("gallery_reviews")
+    .insert({ ...review, source: "user" })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Review submit failed: ${error.message}`);
+  return data as DbReview;
+}
+
+/** Delete a review by id. */
+export async function deleteReview(id: string): Promise<void> {
+  await supabase.from("gallery_reviews").delete().eq("id", id);
 }

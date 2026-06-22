@@ -1,42 +1,43 @@
 "use client";
 /**
- * @file ReviewUploadForm.tsx
- * @description Lets a visitor submit their own review/testimonial.
- * Stored in the browser via userContent.ts.
+ * @file ReviewUploadForm.tsx — v2 (Supabase)
+ * Inserts a review into gallery_reviews table.
+ * Review immediately visible to ALL visitors.
  */
 import { useState } from "react";
-import { addUserReview } from "@/lib/userContent";
+import { submitReview } from "@/lib/userContent";
 
-type Props = {
-  onSubmitted: () => void;
-};
+type Props = { onSubmitted: () => void };
 
 export default function ReviewUploadForm({ onSubmitted }: Props) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [role, setRole] = useState("");
-  const [rating, setRating] = useState(5);
-  const [review, setReview] = useState("");
+  const [open,       setOpen]       = useState(false);
+  const [name,       setName]       = useState("");
+  const [role,       setRole]       = useState("");
+  const [rating,     setRating]     = useState(5);
+  const [review,     setReview]     = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [error,      setError]      = useState("");
+  const [success,    setSuccess]    = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !review.trim()) {
-      setError("Please fill in your name and review.");
-      return;
-    }
+    if (!name.trim())   { setError("Please enter your name."); return; }
+    if (!review.trim()) { setError("Please write your review."); return; }
     setSubmitting(true);
+    setError("");
     try {
-      addUserReview({
-        name: name.trim(),
-        role: role.trim() || "Student",
+      await submitReview({
+        name:   name.trim(),
+        role:   role.trim() || "Student",
         rating,
         review: review.trim(),
       });
+      setSuccess(true);
       setName(""); setRole(""); setReview(""); setRating(5);
-      setOpen(false);
       onSubmitted();
+      setTimeout(() => { setSuccess(false); setOpen(false); }, 2200);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Submission failed. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -57,50 +58,43 @@ export default function ReviewUploadForm({ onSubmitted }: Props) {
         <button type="button" onClick={() => setOpen(false)} className="upload-close-btn" aria-label="Close">✕</button>
       </div>
 
-      <input
-        type="text" value={name} onChange={(e) => setName(e.target.value)}
-        placeholder="Your name" className="upload-input" maxLength={60} required
-      />
-      <input
-        type="text" value={role} onChange={(e) => setRole(e.target.value)}
-        placeholder="e.g. IELTS Student, Working Professional" className="upload-input" maxLength={60}
-      />
+      <input type="text" value={name} onChange={e => setName(e.target.value)}
+        placeholder="Your full name *" className="upload-input" maxLength={60} required />
 
-      {/* Star rating picker */}
+      <input type="text" value={role} onChange={e => setRole(e.target.value)}
+        placeholder="e.g. IELTS Student, Working Professional" className="upload-input" maxLength={60} />
+
+      {/* Star rating */}
       <div className="rating-picker">
         <span className="rating-picker-label">Your rating:</span>
-        <div style={{ display: "flex", gap: "2px" }}>
-          {[1, 2, 3, 4, 5].map((star) => (
-            <button
-              key={star}
-              type="button"
-              onClick={() => setRating(star)}
-              aria-label={`${star} star${star > 1 ? "s" : ""}`}
-              className="rating-star-btn"
-              style={{ color: star <= rating ? "var(--orange)" : "var(--text-4)" }}
-            >★</button>
+        <div style={{ display:"flex", gap:"2px" }}>
+          {[1,2,3,4,5].map(star => (
+            <button key={star} type="button" onClick={() => setRating(star)}
+              aria-label={`${star} star`} className="rating-star-btn"
+              style={{ color: star <= rating ? "var(--orange)" : "var(--text-4)" }}>
+              ★
+            </button>
           ))}
         </div>
       </div>
 
-      <textarea
-        value={review}
-        onChange={(e) => setReview(e.target.value)}
-        placeholder="Tell us about your experience at JVM Academy…"
-        className="upload-input upload-textarea"
-        rows={4}
-        maxLength={500}
-        required
-      />
+      <textarea value={review} onChange={e => setReview(e.target.value)}
+        placeholder="Tell us about your experience at JVM Academy… *"
+        className="upload-input upload-textarea" rows={4} maxLength={500} required />
 
-      {error && <p className="upload-error">{error}</p>}
+      {error   && <p className="upload-error">⚠ {error}</p>}
+      {success && <p className="upload-success">✅ Review submitted! Thank you — it's now live for everyone.</p>}
 
-      <button type="submit" className="btn-primary" disabled={submitting} style={{ justifyContent: "center", width: "100%" }}>
-        {submitting ? "Submitting…" : "Submit Review"}
+      <button type="submit" className="btn-primary" disabled={submitting} style={{ justifyContent:"center" }}>
+        {submitting ? (
+          <><span className="upload-spinner" /> Submitting…</>
+        ) : (
+          "Submit Review"
+        )}
       </button>
 
       <p className="upload-disclaimer">
-        Reviews are stored in your browser for this demo site. Visible only to you for now.
+        📢 Your review will be visible to all visitors instantly — stored securely in the cloud.
       </p>
     </form>
   );
